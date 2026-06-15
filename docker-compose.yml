@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine  # маленький образ (~200MB)
+    environment:
+      POSTGRES_USER: kubsu
+      POSTGRES_PASSWORD: kubsu
+      POSTGRES_DB: kubsu
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kubsu"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "8048:8048"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: kubsu
+      DB_PASSWORD: kubsu
+      DB_NAME: kubsu
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8048/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
