@@ -1,0 +1,101 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        load: true
+        tags: app:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Start test database
+      run: |
+        docker run -d --name test-db \
+          -e POSTGRES_USER=kubsu \
+          -e POSTGRES_PASSWORD=kubsu \
+          -e POSTGRES_DB=kubsu \
+          -p 5432:5432 \
+          postgres:15-alpine
+    
+    - name: Wait for database
+      run: |
+        until docker exec test-db pg_isready -U kubsu; do
+          sleep 1
+        done
+    
+    - name: Run tests in container
+      run: |
+        docker run --rm \
+          --network host \
+          -e DB_HOST=localhost \
+          -e DB_PASSWORD=kubsu \
+          app:test \
+          pytest tests/ -v
+    
+    - name: Cleanup
+      if: always()
+      run: docker stop test-db && docker rm test-db
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Build production image
+      run: |
+        docker build -t app:prod .
+        # Сохраняем образ для передачи на сервер
+        docker save app:prod | gzip > app.tar.gz
+    
+    - name: Deploy to server
+      uses: appleboy/scp-action@v0.1.4
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        port: ${{ secrets.DEPLOY_PORT }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_KEY }}
+        source: "app.tar.gz"
+        target: "/home/${{ secrets.DEPLOY_USER }}/tasks/"
+    
+    - name: Deploy commands
+      uses: appleboy/ssh-action@v0.1.5
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        port: ${{ secrets.DEPLOY_PORT }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_KEY }}
+        script: |
+          cd /home/${{ secrets.DEPLOY_USER }}/tasks/
+          podman load < app.tar.gz
+          podman stop app-${{ secrets.DEPLOY_USER }} || true
+          podman rm app-${{ secrets.DEPLOY_USER }} || true
+          podman run -d \
+            --name app-${{ secrets.DEPLOY_USER }} \
+            -p 8048:8048 \
+            -e DB_HOST=${{ secrets.DB_HOST }} \
+            -e DB_USER=${{ secrets.DB_USER }} \
+            -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+            -e DB_NAME=${{ secrets.DB_NAME }} \
+            app:prod
