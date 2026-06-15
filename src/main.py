@@ -65,6 +65,7 @@ async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
     return {"detail": "User deleted"}
 
 
+
 @app.get("/health")
 async def health_check(db: AsyncSession = Depends(get_db)):
     try:
