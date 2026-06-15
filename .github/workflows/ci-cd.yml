@@ -3,12 +3,18 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ master, main ]
+    paths-ignore:  # НЕ запускать тесты при изменениях в tests/
+      - 'tests/**'
   pull_request:
     branches: [ master, main ]
+    paths-ignore:
+      - 'tests/**'
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Пропускаем тесты, если только тесты и изменились
+    if: ${{ !contains(github.event.head_commit.modified, 'tests/') }}
     steps:
     - uses: actions/checkout@v3
     
@@ -52,8 +58,7 @@ jobs:
           -e DB_PASSWORD=kubsu \
           -e DB_NAME=kubsu \
           app:test \
-          sh -c "cd /app && python -m pytest tests/ -v"
-      # Или если pytest не в PATH: python -m pytest
+          python -m pytest tests/ -v
     
     - name: Cleanup
       if: always()
@@ -76,31 +81,48 @@ jobs:
     - name: Deploy to server
       uses: appleboy/scp-action@v0.1.4
       with:
-        host: ${{ secrets.DEPLOY_HOST }}
-        port: ${{ secrets.DEPLOY_PORT }}
-        username: ${{ secrets.DEPLOY_USER }}
+        host: ${{ vars.DEPLOY_HOST }}        # Используем vars вместо secrets
+        port: ${{ vars.DEPLOY_PORT }}        # если это не секрет
+        username: ${{ vars.DEPLOY_USER }}
         key: ${{ secrets.DEPLOY_KEY }}
         source: "app.tar.gz"
-        target: "/home/${{ secrets.DEPLOY_USER }}/tasks/"
+        target: "/home/${{ vars.DEPLOY_USER }}/tasks/"
+        rm: true
+        debug: true
     
     - name: Deploy and run
       uses: appleboy/ssh-action@v0.1.5
       with:
-        host: ${{ secrets.DEPLOY_HOST }}
-        port: ${{ secrets.DEPLOY_PORT }}
-        username: ${{ secrets.DEPLOY_USER }}
+        host: ${{ vars.DEPLOY_HOST }}
+        port: ${{ vars.DEPLOY_PORT }}
+        username: ${{ vars.DEPLOY_USER }}
         key: ${{ secrets.DEPLOY_KEY }}
         script: |
-          cd /home/${{ secrets.DEPLOY_USER }}/tasks/
+          cd /home/${{ vars.DEPLOY_USER }}/tasks/
+          
+          # Загружаем образ
           podman load < app.tar.gz
-          podman stop app-${{ secrets.DEPLOY_USER }} || true
-          podman rm app-${{ secrets.DEPLOY_USER }} || true
-          podman run -d \
-            --name app-${{ secrets.DEPLOY_USER }} \
-            -p 8048:8048 \
-            -e DB_HOST=${{ secrets.DB_HOST }} \
-            -e DB_USER=${{ secrets.DB_USER }} \
-            -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
-            -e DB_NAME=${{ secrets.DB_NAME }} \
-            app:prod
           rm app.tar.gz
+          
+          # Останавливаем и удаляем старый контейнер
+          podman stop app-${{ vars.DEPLOY_USER }} || true
+          podman rm app-${{ vars.DEPLOY_USER }} || true
+          
+          # Запускаем новый контейнер
+          podman run -d \
+            --name app-${{ vars.DEPLOY_USER }} \
+            --restart unless-stopped \
+            -p 8048:8048 \
+            -e DB_HOST=${{ vars.DB_HOST }} \
+            -e DB_PORT=${{ vars.DB_PORT }} \
+            -e DB_USER=${{ vars.DB_USER }} \
+            -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+            -e DB_NAME=${{ vars.DB_NAME }} \
+            app:prod
+          
+          # Очищаем старые образы
+          podman image prune -f
+          
+          # Проверяем, что контейнер запустился
+          sleep 5
+          podman ps | grep app-${{ vars.DEPLOY_USER }}
