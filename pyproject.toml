@@ -6,7 +6,8 @@ dependencies = [
     "fastapi==0.115.8",
     "uvicorn==0.34.0",
     "sqlalchemy==2.0.37",
-    "aiosqlite==0.19.0"
+    "psycopg-binary==3.2.4",
+    "psycopg==3.2.4"
 ]
 
 [project.optional-dependencies]
@@ -19,4 +20,3 @@ test = [
 [build-system]
 requires = ["setuptools>=40.8.0"]
 build-backend = "setuptools.build_meta:__legacy__"
-
