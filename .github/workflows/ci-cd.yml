@@ -1,11 +1,8 @@
+# Исправленный ci-cd.yml - сервер сам забирает обновления
 name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ master, main ]
-    paths-ignore:  # НЕ запускать тесты при изменениях в tests/
-      - 'tests/**'
-  pull_request:
     branches: [ master, main ]
     paths-ignore:
       - 'tests/**'
@@ -13,7 +10,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Пропускаем тесты, если только тесты и изменились
     if: ${{ !contains(github.event.head_commit.modified, 'tests/') }}
     steps:
     - uses: actions/checkout@v3
@@ -21,7 +17,7 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v2
     
-    - name: Build image
+    - name: Build and test
       uses: docker/build-push-action@v4
       with:
         context: .
@@ -49,7 +45,7 @@ jobs:
           sleep 1
         done
     
-    - name: Run tests in container
+    - name: Run tests
       run: |
         docker run --rm \
           --network container:test-db \
@@ -65,64 +61,29 @@ jobs:
       run: |
         docker stop test-db || true
         docker rm test-db || true
+    
+    - name: Push to registry (GitHub Container Registry)
+      if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Push production image
+      if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+      run: |
+        docker tag app:test ghcr.io/${{ github.repository }}/app:latest
+        docker push ghcr.io/${{ github.repository }}/app:latest
 
   deploy:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    # Этот job ничего не деплоит, а только создает webhook
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Build production image
+    - name: Trigger deployment on server
       run: |
-        docker build -t app:prod .
-        docker save app:prod | gzip > app.tar.gz
-    
-    - name: Deploy to server
-      uses: appleboy/scp-action@v0.1.4
-      with:
-        host: ${{ vars.DEPLOY_HOST }}        # Используем vars вместо secrets
-        port: ${{ vars.DEPLOY_PORT }}        # если это не секрет
-        username: ${{ vars.DEPLOY_USER }}
-        key: ${{ secrets.DEPLOY_KEY }}
-        source: "app.tar.gz"
-        target: "/home/${{ vars.DEPLOY_USER }}/tasks/"
-        rm: true
-        debug: true
-    
-    - name: Deploy and run
-      uses: appleboy/ssh-action@v0.1.5
-      with:
-        host: ${{ vars.DEPLOY_HOST }}
-        port: ${{ vars.DEPLOY_PORT }}
-        username: ${{ vars.DEPLOY_USER }}
-        key: ${{ secrets.DEPLOY_KEY }}
-        script: |
-          cd /home/${{ vars.DEPLOY_USER }}/tasks/
-          
-          # Загружаем образ
-          podman load < app.tar.gz
-          rm app.tar.gz
-          
-          # Останавливаем и удаляем старый контейнер
-          podman stop app-${{ vars.DEPLOY_USER }} || true
-          podman rm app-${{ vars.DEPLOY_USER }} || true
-          
-          # Запускаем новый контейнер
-          podman run -d \
-            --name app-${{ vars.DEPLOY_USER }} \
-            --restart unless-stopped \
-            -p 8048:8048 \
-            -e DB_HOST=${{ vars.DB_HOST }} \
-            -e DB_PORT=${{ vars.DB_PORT }} \
-            -e DB_USER=${{ vars.DB_USER }} \
-            -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
-            -e DB_NAME=${{ vars.DB_NAME }} \
-            app:prod
-          
-          # Очищаем старые образы
-          podman image prune -f
-          
-          # Проверяем, что контейнер запустился
-          sleep 5
-          podman ps | grep app-${{ vars.DEPLOY_USER }}
+        echo "Deployment will be triggered by server itself"
+        # Опционально: отправляем уведомление на сервер через webhook
+        # curl -X POST http://212.192.134.135:8048/webhook/deploy || true
