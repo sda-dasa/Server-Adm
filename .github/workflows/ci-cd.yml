@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [ master, main ]
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -39,22 +35,31 @@ jobs:
     
     - name: Wait for database
       run: |
-        until docker exec test-db pg_isready -U kubsu; do
+        for i in {1..30}; do
+          if docker exec test-db pg_isready -U kubsu; then
+            echo "Database is ready"
+            break
+          fi
           sleep 1
         done
     
     - name: Run tests in container
       run: |
         docker run --rm \
-          --network host \
+          --network container:test-db \
           -e DB_HOST=localhost \
+          -e DB_USER=kubsu \
           -e DB_PASSWORD=kubsu \
+          -e DB_NAME=kubsu \
           app:test \
-          pytest tests/ -v
+          sh -c "cd /app && python -m pytest tests/ -v"
+      # Или если pytest не в PATH: python -m pytest
     
     - name: Cleanup
       if: always()
-      run: docker stop test-db && docker rm test-db
+      run: |
+        docker stop test-db || true
+        docker rm test-db || true
 
   deploy:
     needs: test
@@ -66,7 +71,6 @@ jobs:
     - name: Build production image
       run: |
         docker build -t app:prod .
-        # Сохраняем образ для передачи на сервер
         docker save app:prod | gzip > app.tar.gz
     
     - name: Deploy to server
@@ -79,7 +83,7 @@ jobs:
         source: "app.tar.gz"
         target: "/home/${{ secrets.DEPLOY_USER }}/tasks/"
     
-    - name: Deploy commands
+    - name: Deploy and run
       uses: appleboy/ssh-action@v0.1.5
       with:
         host: ${{ secrets.DEPLOY_HOST }}
@@ -99,3 +103,4 @@ jobs:
             -e DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
             -e DB_NAME=${{ secrets.DB_NAME }} \
             app:prod
+          rm app.tar.gz
