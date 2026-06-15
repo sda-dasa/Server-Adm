@@ -1,48 +1,38 @@
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
-import os
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.database import AsyncSessionLocal, init_db as create_tables
 from src.main import app
-from src.models import Base
+from src.models import User
 
-# Используем отдельную тестовую БД
-TEST_DATABASE_URL = os.getenv(
-    'TEST_DATABASE_URL', 
-    'postgresql+psycopg://kubsu:kubsu@localhost:5432/kubsu_test'
-)
-
-test_engine = create_async_engine(TEST_DATABASE_URL, echo=True)
-TestAsyncSessionLocal = sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
 
 @pytest_asyncio.fixture(scope="session")
-async def init_db():
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+async def init_db() -> None:
+    await create_tables()
+
 
 @pytest_asyncio.fixture(scope='function')
 async def db() -> AsyncSession:
-    async with TestAsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:
         yield session
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def test_client():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
+
 @pytest_asyncio.fixture(autouse=True)
 async def clear_table(init_db, db: AsyncSession) -> None:
-    await db.execute(text("TRUNCATE users RESTART IDENTITY CASCADE;"))
+    await db.execute(text("TRUNCATE users;"))
     await db.commit()
 
+
 @pytest_asyncio.fixture
-async def user(db: AsyncSession):
-    from src.models import User
+async def user(db: AsyncSession) -> User:
     user = User(name="John Doe")
     db.add(user)
     await db.commit()
