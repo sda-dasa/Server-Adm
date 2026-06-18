@@ -17,7 +17,7 @@ jobs:
         # Собираем образ
         docker build -t app:test .
         
-        # Запускаем тестовую БД
+        # Запускаем тестовую БД (изолированная для тестов)
         docker run -d --name test-db \
           -e POSTGRES_USER=kubsu \
           -e POSTGRES_PASSWORD=kubsu \
