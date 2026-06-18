@@ -14,32 +14,46 @@ jobs:
       run: |
         cd /home/subuser/tasks/docker
         
-        # Собираем образ
+        echo "🔨 Building Docker image..."
         docker build -t app:test .
         
-        # Запускаем тестовую БД (изолированная для тестов)
+        echo "🗑️ Removing old test containers..."
+        docker ps -a | grep 'test-db' | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
+        
+        echo "🐘 Starting test database..."
         docker run -d --name test-db \
           -e POSTGRES_USER=kubsu \
           -e POSTGRES_PASSWORD=kubsu \
-          -e POSTGRES_DB=kubsu \
+          -e POSTGRES_DB=test_db \
           -p 5432:5432 \
           postgres:15-alpine
         
-        sleep 5
+        echo "⏳ Waiting for PostgreSQL..."
+        for i in {1..30}; do
+          if docker exec test-db pg_isready -U kubsu 2>/dev/null; then
+            echo "✅ PostgreSQL is ready!"
+            break
+          fi
+          echo "Waiting... $i/30"
+          sleep 1
+        done
         
-        # Запускаем тесты
+        echo "🧪 Running tests..."
         docker run --rm \
           --network container:test-db \
           -e DB_HOST=localhost \
           -e DB_USER=kubsu \
           -e DB_PASSWORD=kubsu \
-          -e DB_NAME=kubsu \
+          -e DB_NAME=test_db \
           app:test \
           python -m pytest tests/ -v
-        
-        # Очистка
-        docker stop test-db || true
-        docker rm test-db || true
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        docker stop test-db 2>/dev/null || true
+        docker rm test-db 2>/dev/null || true
+        docker image prune -f 2>/dev/null || true
 
   deploy:
     needs: test
@@ -51,4 +65,5 @@ jobs:
     - name: Deploy
       run: |
         cd /home/subuser/tasks/docker
+        echo "🚀 Starting deployment..."
         ./deploy.sh
