@@ -1,5 +1,4 @@
-# .github/workflows/test.yml
-name: Tests
+name: CI/CD Pipeline
 
 on:
   push:
@@ -7,39 +6,49 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
     - uses: actions/checkout@v3
     
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    
-    - name: Build image
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        load: true
-        tags: app:test
-    
-    - name: Start test database
+    - name: Build and test
       run: |
+        cd /home/subuser/tasks/docker
+        
+        # Собираем образ
+        docker build -t app:test .
+        
+        # Запускаем тестовую БД
         docker run -d --name test-db \
           -e POSTGRES_USER=kubsu \
           -e POSTGRES_PASSWORD=kubsu \
           -e POSTGRES_DB=kubsu \
           -p 5432:5432 \
           postgres:15-alpine
-    
-    - name: Run tests
-      run: |
+        
+        sleep 5
+        
+        # Запускаем тесты
         docker run --rm \
           --network container:test-db \
           -e DB_HOST=localhost \
           -e DB_USER=kubsu \
           -e DB_PASSWORD=kubsu \
+          -e DB_NAME=kubsu \
           app:test \
           python -m pytest tests/ -v
+        
+        # Очистка
+        docker stop test-db || true
+        docker rm test-db || true
+
+  deploy:
+    needs: test
+    runs-on: self-hosted
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v3
     
-    - name: Cleanup
-      if: always()
-      run: docker rm -f test-db || true
+    - name: Deploy
+      run: |
+        cd /home/subuser/tasks/docker
+        ./deploy.sh
