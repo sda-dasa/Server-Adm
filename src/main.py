@@ -10,7 +10,6 @@ app = FastAPI()
 async def startup():
     await init_db()
 
-
 @app.post("/users/", response_model=schemas.User)
 async def create_user(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     user = models.User(name=user.name)
